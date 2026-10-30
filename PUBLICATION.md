@@ -1,6 +1,6 @@
 # Publication provenance
 
-This private repository is a reviewed source snapshot of the locally maintained RTX-Monitor application. Existing local repositories and their histories were left unchanged.
+This public repository is a reviewed source snapshot of the locally maintained RTX-Monitor application. It was prepared as private and changed to public only after the owner explicitly requested that visibility. Existing local repositories and their histories were left unchanged.
 
 The original application folder did not have an independent Git history.
 

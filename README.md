@@ -1,14 +1,40 @@
-# RTX-Monitor
+<h1 align="center">RTX-Monitor</h1>
 
-**Live resource telemetry with a small footprint.**
+<p align="center"><strong>Live resource telemetry with a small footprint.</strong></p>
+
+## Features
 
 - GPU load, memory, temperature and utilization through NVIDIA NVML.
 - CPU, RAM, disk, network and process information from Linux procfs/sysfs.
 - A dependency-free page receives live samples over Server-Sent Events, with optional Ollama model details.
 
-## Technology and architecture
+![RTX-Monitor interface](docs/images/rtx-monitor-demo.png)
+
+*Dashboard rendered from fabricated telemetry; the screenshot contains no real hostname, process list or device identifier.*
+
+## At a glance
+
+| Area | Details |
+|---|---|
+| Runtime | Python 3 standard library |
+| Interface | Dependency-free HTML/JavaScript + Server-Sent Events |
+| GPU source | NVIDIA NVML via `ctypes` |
+| System source | Linux `/proc` and `/sys` |
+| Default ports | HTTP 8888 · HTTPS 18888 |
+
+## Stack and architecture
 
 Python 3 standard library, ctypes bindings to `libnvidia-ml.so.1`, Linux `/proc` and `/sys`, and a standalone HTML/JavaScript dashboard. `server.py` collects samples and serves HTTP/SSE; `index.html` renders the stream.
+
+
+## Repository map
+
+| Path | Responsibility |
+|---|---|
+| `server.py` | Collectors, NVML bindings, HTTP server and SSE stream |
+| `index.html` | Live dashboard, gauges, charts and process tables |
+| `rtx-monitor.service` | Portable user-service template |
+| `CHECKS.md` | Recorded syntax/CLI validation and hardware-test boundaries |
 
 ## Installation and quick start
 
@@ -19,6 +45,17 @@ python3 server.py --host 127.0.0.1 --port 8888 --interval 1
 ```
 
 Open **http://127.0.0.1:8888**. `--interval` sets sample frequency and `--ollama` selects a local Ollama endpoint. `python3 server.py --once` prints one telemetry sample; its output may contain private process information, so do not commit that output.
+
+
+## Configuration reference
+
+| Setting | Example | Purpose |
+|---|---|---|
+| `--host` | `127.0.0.1` | Bind locally unless process details should be shared |
+| `--port` | `8888` | HTTP listener |
+| `--interval` | `1` | Telemetry sample interval in seconds |
+| `--ollama` | `http://127.0.0.1:11434` | Optional local Ollama endpoint |
+| `--once` | n/a | Print one sample; output may contain private process data |
 
 ## Configuration, dependencies and integrations
 
@@ -39,12 +76,21 @@ python3 server.py --help
 
 See [CHECKS.md](CHECKS.md) for the actual checks run on this publication snapshot, with missing prerequisites, skipped checks and failures distinguished from passes. Historical development results are not fresh verification.
 
-## Troubleshooting and known limitations
+## Troubleshooting
+
+| Symptom | What to check |
+|---|---|
+| GPU fields show n/a | Confirm the NVIDIA driver, NVML library and device permissions. |
+| Stream disconnects | Check reverse-proxy buffering/timeouts and the browser SSE request. |
+| Ollama is unavailable | Verify the optional loopback endpoint; GPU/system monitoring still works. |
+| Metrics expose too much | Bind to loopback and protect any reverse proxy; there is no built-in authentication. |
+
+## Known limitations
 
 There is no existing automated behavior test suite. Syntax and CLI checks do not validate sensor accuracy or NVIDIA hardware. NVML/driver or permissions errors can make GPU fields unavailable. SSE interruptions usually indicate a network/proxy timeout; inspect the browser connection and user-service logs. The dashboard has no authentication layer.
 
 ## Repository contents and privacy
 
-This is a private, source-only publication snapshot. Live storage, credentials, sessions, device identifiers, raw downloaded content, ROM/firmware collections, logs, installed dependencies and generated build output are excluded. The original source folders, ports, services and schedules remain unchanged. [PUBLICATION.md](PUBLICATION.md) records provenance.
+This is a public, source-only publication snapshot. Live storage, credentials, sessions, device identifiers, raw downloaded content, logs, installed dependencies and generated build output are excluded. The original source folders, ports, services and schedules remain unchanged. [PUBLICATION.md](PUBLICATION.md) records provenance and the review boundary.
 
 The [original development guide](docs/DEVELOPMENT.md) is retained for deeper feature details. Its paths and example links may refer to the original multi-project layout; the standalone commands and exclusions above take precedence.
