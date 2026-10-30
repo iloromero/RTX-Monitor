@@ -1,0 +1,698 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RTX Monitor</title>
+<script>
+// apply a saved theme before first paint so the page doesn't flash
+try { const t = localStorage.getItem("rtx-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f3f4f6; --panel: #ffffff; --text: #111827; --label: #4b5563; --muted: #6b7280;
+  --border: #e5e7eb; --line: #eceef1; --track: #e5e7eb; --tile: #e9ebef;
+  --c-gpu: #76b900; --c-vram: #7c3aed; --c-power: #0d9488; --c-cpu: #2563eb;
+  --c-ram: #db2777; --c-disk: #1d8fc4; --c-fs: #3a8fb7; --c-temp: #3a9b45;
+  --c-watts: #e07b1a; --c-rx: #3b9bd6; --c-tx: #7c3aed; --c-net: #4338ca;
+  --amber: #d97706; --red: #dc2626; --ok: #22a046;
+  --warn-bg: #fff6e5;
+}
+/* dark palette: follows the OS until the header toggle sets data-theme */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1116; --panel: #171b22; --text: #e6e8eb; --label: #aab1bc; --muted: #858d99;
+    --border: #262c36; --line: #232933; --track: #2a313c; --tile: #222833;
+    --c-gpu: #8fd11c; --c-vram: #a37cf7; --c-power: #2cc4b8; --c-cpu: #5b8ff9;
+    --c-ram: #f067a6; --c-disk: #38aee6; --c-fs: #5fb0d6; --c-temp: #4cbb5a;
+    --c-watts: #f29a45; --c-rx: #5fb3ea; --c-tx: #a37cf7; --c-net: #818cf8;
+    --amber: #f0a020; --red: #f05252; --ok: #34c759;
+    --warn-bg: #36290f;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+    --bg: #0e1116; --panel: #171b22; --text: #e6e8eb; --label: #aab1bc; --muted: #858d99;
+    --border: #262c36; --line: #232933; --track: #2a313c; --tile: #222833;
+    --c-gpu: #8fd11c; --c-vram: #a37cf7; --c-power: #2cc4b8; --c-cpu: #5b8ff9;
+    --c-ram: #f067a6; --c-disk: #38aee6; --c-fs: #5fb0d6; --c-temp: #4cbb5a;
+    --c-watts: #f29a45; --c-rx: #5fb3ea; --c-tx: #a37cf7; --c-net: #818cf8;
+    --amber: #f0a020; --red: #f05252; --ok: #34c759;
+    --warn-bg: #36290f;
+}
+:root[data-theme="light"] { color-scheme: light; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+       font-variant-numeric: tabular-nums; padding: 14px 20px 28px; }
+.muted { color: var(--muted); }
+.na { color: var(--muted); font-style: italic; }
+
+/* header */
+header { position: relative; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 20px; margin: 0 0 14px; padding-right: 46px; }
+.theme-toggle { position: absolute; top: -2px; right: 0; width: 34px; height: 34px; display: grid; place-items: center;
+                border: 1px solid var(--border); border-radius: 9px; background: var(--panel); color: var(--label); cursor: pointer; padding: 0; }
+.theme-toggle:hover { color: var(--text); border-color: var(--muted); }
+.theme-toggle:focus-visible { outline: 2px solid var(--c-cpu); outline-offset: 2px; }
+.theme-toggle svg { width: 18px; height: 18px; }
+.theme-toggle .sun { display: none; }
+.is-dark .theme-toggle .sun { display: block; }
+.is-dark .theme-toggle .moon { display: none; }
+header h1 { font-size: 19px; font-weight: 700; margin: 0; display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; align-self: center; }
+.dot.live { background: var(--ok); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 25%, transparent); }
+.dot.stale { background: var(--amber); }
+.dot.down { background: var(--red); }
+.hitem { color: var(--label); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+/* dial cards */
+/* one row: a column per dial (--n is set from the dial count); text scales with the card */
+.dials { display: grid; grid-template-columns: repeat(var(--n, 8), minmax(0, 1fr)); gap: clamp(6px, .8vw, 12px); margin-bottom: 14px; }
+@media (max-width: 720px) { .dials { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .dials { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; } }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; min-width: 0; }
+.dial { padding: clamp(8px, 1vw, 14px) clamp(5px, .9vw, 14px) clamp(7px, .8vw, 12px); display: flex; flex-direction: column; container-type: inline-size; }
+.dial .title { text-align: center; font-size: clamp(9px, 7.4cqi, 12px); font-weight: 600; letter-spacing: clamp(.02em, .6cqi, .09em); text-transform: uppercase; color: var(--label);
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dial svg.gauge { display: block; width: 100%; max-width: 190px; margin: 4px auto 0; }
+.dial .track { fill: none; stroke: var(--track); stroke-width: 13; stroke-linecap: round; }
+.dial .val { fill: none; stroke-width: 13; stroke-linecap: round; transition: stroke-dasharray .6s ease, stroke .3s; }
+.dial .tl { fill: var(--muted); font-size: 9.5px; text-anchor: middle; dominant-baseline: middle; }
+.dial .big { fill: var(--text); font-size: 33px; font-weight: 700; text-anchor: middle; }
+.dial .sub { text-align: center; color: var(--label); font-size: clamp(9.5px, 7.8cqi, 12.5px); line-height: 1.25; margin-top: -4px; text-wrap: balance; }
+.dial .title .short { display: none; }
+/* narrow cards: short title; the subtitle wraps rather than being cut off */
+@container (max-width: 135px) {
+  .dial .title .long { display: none; }
+  .dial .title .short { display: inline; }
+}
+.chart { display: block; width: 100%; height: 30px; margin-top: 10px; }
+.dial .chart { margin-top: auto; padding-top: 8px; height: 38px; }
+
+/* panels */
+.panels { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
+.panel { grid-column: span 2; padding: 16px 16px 14px; }
+.panel.half { grid-column: span 3; }
+.panel.wide { grid-column: 1 / -1; }
+@media (max-width: 1150px) {
+  .panels { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .panel, .panel.half { grid-column: span 1; }
+  .panel.wide, .panel.full-md { grid-column: 1 / -1; }
+}
+@media (max-width: 720px) {
+  .panels { grid-template-columns: minmax(0, 1fr); }
+  .panel.wide, .panel.full-md { grid-column: auto; }
+}
+.panel h2 { font-size: 12.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--label);
+            margin: 0 0 12px; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.panel h2 .meta { text-transform: none; letter-spacing: 0; color: var(--text); font-size: 13.5px; font-weight: 600; }
+.panel h2 .meta.quiet { color: var(--muted); font-weight: 500; }
+.subhead { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--label); margin: 4px 0 6px; }
+.subhead .r { color: var(--muted); font-size: 12.5px; }
+.subhead.sec { color: var(--text); font-weight: 600; font-size: 13.5px; margin: 0 0 8px; }
+.subhead.sec .r { color: var(--text); font-size: 13.5px; }
+.subhead.sec .r.quiet { color: var(--muted); font-weight: 500; font-size: 12.5px; }
+.divider { border-top: 1px solid var(--line); margin: 14px 0 12px; }
+
+/* key/value rows */
+.kvr { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14px; min-width: 0; }
+.kvr:last-child { border-bottom: 0; }
+.kvr .k { color: var(--label); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.kvr .v { text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kvr .muted { font-size: 12.5px; }
+.chips { display: inline-flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.chip { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--tile); color: var(--text); white-space: nowrap; }
+.chip.warn { background: color-mix(in srgb, var(--amber) 28%, transparent); }
+.chip.bad { background: color-mix(in srgb, var(--red) 28%, transparent); }
+
+/* stacked memory bars + legends */
+.stack { display: flex; height: 22px; background: var(--track); border-radius: 4px; overflow: hidden; }
+.stack > div { height: 100%; transition: width .4s ease; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13.5px; margin-top: 10px; }
+.legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.legend.small { font-size: 12px; color: var(--label); margin-top: 6px; gap: 4px 12px; }
+.legend.small i { width: 11px; height: 3px; border-radius: 1px; vertical-align: 3px; margin-right: 5px; }
+.note { font-size: 13px; color: var(--label); margin-top: 10px; }
+
+/* cpu tiles */
+.cg + .cg { margin-top: 14px; }
+.cgh { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--label); margin-bottom: 6px; }
+.cgh .r { color: var(--muted); }
+.tiles { display: grid; gap: 5px 6px; align-items: center; }
+.tile { position: relative; height: 44px; background: var(--tile); border-radius: 3px; overflow: hidden; }
+.tile .f { position: absolute; left: 0; right: 0; bottom: 0; height: 0; transition: height .4s ease; }
+.tile span { position: absolute; left: 0; right: 0; bottom: 3px; text-align: center; font-size: 10.5px; font-weight: 600;
+             color: #111; text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff; }
+.rl { font-size: 10px; color: var(--muted); text-align: right; padding-right: 2px; }
+.ghz { font-size: 10px; color: var(--muted); text-align: center; white-space: nowrap; overflow: hidden; }
+
+/* temperatures */
+.trow { padding: 7px 0 9px; border-bottom: 1px solid var(--line); }
+.trow:last-child { border-bottom: 0; }
+.trow .top { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; }
+.trow .top .k { color: var(--label); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tbar { height: 5px; background: var(--track); border-radius: 3px; margin-top: 6px; overflow: hidden; }
+.tbar > div { height: 100%; width: 0; border-radius: 3px; transition: width .4s ease; }
+
+/* ollama */
+.om { padding: 6px 0 8px; }
+.om + .om { border-top: 1px solid var(--line); }
+.om .n { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.om .n .muted { font-weight: 400; font-size: 12.5px; }
+.om .d { text-align: right; color: var(--muted); font-size: 12.5px; }
+.om.warn { background: var(--warn-bg); border-left: 3px solid var(--amber); padding-left: 8px; padding-right: 6px; border-radius: 4px; }
+.om.warn .d { color: var(--text); }
+
+/* tables */
+table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13.5px; }
+th { text-align: left; font-weight: 600; color: var(--label); font-size: 12.5px; padding: 4px 6px 6px; border-bottom: 1px solid var(--border); }
+td { padding: 7px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+tbody tr:last-child td { border-bottom: 0; }
+td.r, th.r { text-align: right; }
+td.cmd { color: var(--label); }
+.gpu-block + .gpu-block { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
+
+@media (max-width: 520px) {
+  body { padding: 10px 16px 20px; }
+  header h1 { font-size: 17px; }
+  .hitem { font-size: 12.5px; }
+  .hide-sm { display: none; }
+  .tile { height: 36px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="dot" id="dot" title="connection"></span><span id="title">RTX Monitor</span></h1>
+  <span class="hitem" id="h-gpu"></span>
+  <span class="hitem" id="h-cpu"></span>
+  <span class="hitem" id="h-up"></span>
+  <span class="hitem" id="h-load"></span>
+  <span class="hitem" id="h-cost" title="time to collect one sample (wall clock; sampler CPU time in brackets)"></span>
+  <button class="theme-toggle" id="theme-toggle" type="button">
+    <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+  </button>
+</header>
+
+<section class="dials" id="dials"></section>
+
+<main class="panels">
+  <section class="card panel">
+    <h2>CPU cores <span class="meta" id="cpu-meta"></span></h2>
+    <div id="cores"></div>
+  </section>
+
+  <section class="card panel">
+    <h2>Memory</h2>
+    <div class="subhead sec"><span>System memory</span><span class="r" id="mem-meta"></span></div>
+    <div id="mem"></div>
+    <div class="divider"></div>
+    <div class="subhead sec"><span>GPU memory (VRAM)</span><span class="r" id="vram-meta"></span></div>
+    <div id="vram"></div>
+    <div class="divider"></div>
+    <div class="subhead"><span>Ollama</span><span class="r" id="ollama-h"></span></div>
+    <div id="ollama"></div>
+  </section>
+
+  <section class="card panel">
+    <h2>GPU <span class="meta" id="gpu-meta"></span></h2>
+    <div id="gpud"></div>
+  </section>
+
+  <section class="card panel half">
+    <h2>Temperatures</h2>
+    <div id="temps"></div>
+  </section>
+
+  <section class="card panel half full-md">
+    <h2>Disk &amp; network</h2>
+    <div id="io"></div>
+    <svg class="chart" id="net-chart" viewBox="0 0 119 30" preserveAspectRatio="none"></svg>
+    <div class="legend small"><span><i style="background:var(--c-rx)"></i>net rx</span><span><i style="background:var(--c-tx)"></i>net tx</span><span class="muted" id="net-max"></span></div>
+  </section>
+
+  <section class="card panel wide">
+    <h2>Processes</h2>
+    <div class="subhead sec"><span>GPU processes</span><span class="r" id="gproc-meta"></span></div>
+    <div id="gproc"></div>
+    <div class="divider"></div>
+    <div class="subhead sec"><span>Top CPU processes</span><span class="r quiet">by CPU · refreshed every 3 s</span></div>
+    <div id="top"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const HIST = 120;
+
+// ---------- formatting
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function bytes(b) {
+  if (b == null) return "n/a";
+  const u = ["B", "KiB", "MiB", "GiB", "TiB"]; let i = 0;
+  while (Math.abs(b) >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return (i === 0 ? b.toFixed(0) : b.toFixed(b < 10 ? 2 : b < 100 ? 1 : 0)) + " " + u[i];
+}
+function gib(b, d = 1) { return b == null ? "n/a" : (b / 2 ** 30).toFixed(d) + " GiB"; }
+function rate(b) {
+  if (b == null) return "n/a";
+  if (b < 1024) return b.toFixed(0) + " B/s";
+  if (b < 1048576) return (b / 1024).toFixed(b < 10240 ? 1 : 0) + " KiB/s";
+  return (b / 1048576).toFixed(b < 10485760 ? 2 : 1) + " MiB/s";
+}
+function dur(s) {
+  if (s == null) return "n/a";
+  s = Math.max(0, Math.round(s));
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  if (d) return `${d}d ${h}h ${m}m`;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m} min`;
+  return `${s} s`;
+}
+const pct = (v, d = 0) => v == null ? "n/a" : v.toFixed(d) + "%";
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const level = (p, base) => p == null ? base : p >= 90 ? css("--red") : p >= 70 ? css("--amber") : base;
+const ctxLabel = n => n == null ? "n/a ctx" : n >= 1024 && n % 1024 === 0 ? `${n / 1024}k ctx` : `${n.toLocaleString()} ctx`;
+
+// ---------- 270° gauge: SVG angles (0° = +x, clockwise); the arc runs 135° → 405°
+const R = 52, CX = 75, CY = 70, CIRC = 2 * Math.PI * R, ARC = CIRC * 0.75;
+function polar(r, deg) { const a = deg * Math.PI / 180; return [CX + r * Math.cos(a), CY + r * Math.sin(a)]; }
+function gaugeSVG(title) {
+  let labels = "";
+  for (const f of [0, .25, .5, .75, 1]) {
+    const [x, y] = polar(R + 15, 135 + 270 * f);
+    labels += `<text class="tl" x="${x.toFixed(1)}" y="${y.toFixed(1)}">${f * 100}</text>`;
+  }
+  return `<svg class="gauge" viewBox="0 -10 150 138" role="img" aria-label="${esc(title)}">
+    <circle class="track" cx="${CX}" cy="${CY}" r="${R}" stroke-dasharray="${ARC} ${CIRC}" transform="rotate(135 ${CX} ${CY})"/>
+    <circle class="val" cx="${CX}" cy="${CY}" r="${R}" stroke-dasharray="0 ${CIRC}" transform="rotate(135 ${CX} ${CY})"/>
+    ${labels}
+    <text class="big" x="${CX}" y="${CY + 12}">–</text>
+  </svg>`;
+}
+
+// filled history chart; series = [{v: [...], color, fill}]
+function drawChart(svg, series, max) {
+  const H = 30;
+  let out = "";
+  for (const s of series) {
+    const n = s.v.length, off = HIST - n;
+    let d = "", first = null, last = null;
+    for (let i = 0; i < n; i++) {
+      const v = s.v[i];
+      if (v == null) continue;
+      const x = off + i, y = H - 1 - Math.min(1, Math.max(0, v / (max || 1))) * (H - 3);
+      d += (first == null ? "M" : "L") + x + " " + y.toFixed(2);
+      if (first == null) first = x;
+      last = x;
+    }
+    if (!d) continue;
+    if (s.fill) out += `<path d="${d}L${last} ${H}L${first} ${H}Z" style="fill:${s.color};fill-opacity:.16;stroke:none"/>`;
+    out += `<path d="${d}" style="fill:none;stroke:${s.color};stroke-width:1.6" vector-effect="non-scaling-stroke"/>`;
+  }
+  svg.innerHTML = out;
+}
+const chartSVG = () => `<svg class="chart" viewBox="0 0 ${HIST - 1} 30" preserveAspectRatio="none"></svg>`;
+const kv = (k, v, title = "") => `<div class="kvr"><span class="k"${title ? ` title="${esc(title)}"` : ""}>${k}</span><span class="v">${v}</span></div>`;
+
+// ---------- state
+let info = null, hist = {}, dials = [], es = null, lastMsg = 0, lastSample = null;
+
+// ---------- theme toggle: light ⇄ dark, starting from the OS preference; remembered per browser
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+const isDark = () => (document.documentElement.dataset.theme || (darkQuery.matches ? "dark" : "light")) === "dark";
+function syncThemeButton() {
+  const dark = isDark(), b = $("theme-toggle");
+  document.documentElement.classList.toggle("is-dark", dark);
+  const label = dark ? "Switch to light mode" : "Switch to dark mode";
+  b.title = label;
+  b.setAttribute("aria-label", label);
+}
+$("theme-toggle").addEventListener("click", () => {
+  const next = isDark() ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("rtx-theme", next); } catch (e) {}
+  syncThemeButton();
+  // charts and arcs take their colours from the theme when drawn: redraw now, not on the next sample
+  if (lastSample) redraw(lastSample);
+});
+darkQuery.addEventListener("change", () => { syncThemeButton(); if (lastSample) redraw(lastSample); });
+syncThemeButton();
+
+function dialDefs() {
+  const defs = [];
+  const gs = info.gpus.length ? info.gpus : [{index: 0}];
+  const multi = gs.length > 1;
+  for (const g of gs) {
+    const i = g.index, pre = multi ? `GPU ${i} ` : "GPU ";
+    defs.push({key: `g${i}_util`, title: `${pre}utilization`, short: `${pre}util`, color: "--c-gpu",
+      sub: s => { const x = s.gpus[i]; return x ? `${x.power_w?.toFixed(1) ?? "n/a"} W · ${x.temp ?? "n/a"} °C` : "n/a"; }});
+    defs.push({key: `g${i}_vram`, title: multi ? `VRAM ${i} used` : "VRAM used", short: multi ? `VRAM ${i}` : "VRAM", color: "--c-vram",
+      sub: s => { const x = s.gpus[i]; return x && x.vram_total ? `${gib(x.vram_used)} of ${gib(x.vram_total)}` : "n/a"; }});
+    defs.push({key: `g${i}_power`, title: `${pre}power`, short: `${pre}power`, color: "--c-power",
+      sub: s => { const x = s.gpus[i]; return x && x.power_w != null ? `${x.power_w.toFixed(0)} W of ${x.power_limit_w?.toFixed(0) ?? "?"} W · P${x.pstate ?? "?"}` : "n/a"; }});
+  }
+  defs.push({key: "cpu", title: "CPU utilization", short: "CPU util", color: "--c-cpu", sub: s => `iowait ${pct(s.cpu.iowait, 1)}`});
+  defs.push({key: "ram", title: "RAM used", short: "RAM", color: "--c-ram", sub: s => `${gib(s.mem.used)} of ${gib(s.mem.total)}`});
+  defs.push({key: "disk", title: "Disk busy", color: "--c-disk",
+    sub: s => { const r = s.disks.reduce((a, d) => a + d.read, 0), w = s.disks.reduce((a, d) => a + d.write, 0);
+                return s.disks.length ? `R ${rate(r)} · W ${rate(w)}` : "n/a"; }});
+  defs.push({key: "net", title: "Network", color: "--c-net",
+    sub: s => {
+      // the NIC the dial is showing: busiest one with a known link speed
+      const nics = s.net.filter(n => n.speed);
+      if (!nics.length) return s.net.length ? "no link speed (Wi-Fi only)" : "no interface up";
+      const busy = n => Math.max(n.rx || 0, n.tx || 0) / n.speed;
+      const n = nics.reduce((a, b) => busy(b) > busy(a) ? b : a);
+      const gb = n.speed >= 1000, scale = (gb ? 1e9 : 1e6) / 8, unit = gb ? "Gb/s" : "Mb/s";
+      const f = b => { const v = (b || 0) / scale; return v.toFixed(v < 10 ? 2 : 1); };
+      return `↓${f(n.rx)} ↑${f(n.tx)} /${gb ? n.speed / 1000 : n.speed} ${unit}`;
+    }});
+  defs.push({key: "rootfs", title: "Root filesystem", short: "Root FS", color: "--c-fs",
+    sub: s => { const f = s.fs.find(x => x.mount === "/"); return f ? `${bytes(f.used)} of ${bytes(f.total)}` : "n/a"; }});
+  return defs;
+}
+
+function build() {
+  document.title = `RTX Monitor · ${info.host}`;
+  $("title").title = info.host;
+  $("h-gpu").textContent = info.gpus.length
+    ? `${info.gpus.map(g => g.name).join(" + ")} · driver ${info.driver}${info.cuda ? " · CUDA " + info.cuda : ""}`
+    : "GPU n/a (NVML unavailable)";
+  if (!info.gpus.length) $("h-gpu").title = info.nvml_error || "";
+  $("h-cpu").textContent = `${info.cpu_model.replace(/ \d+-Core Processor$/, "")} · ${info.cpu_cores} cores / ${info.cpu_threads} threads`;
+
+  dials = dialDefs();
+  $("dials").style.setProperty("--n", dials.length);
+  $("dials").innerHTML = dials.map(d =>
+    `<div class="card dial" data-k="${d.key}"><div class="title"><span class="long">${esc(d.title)}</span><span class="short">${esc(d.short || d.title)}</span></div>${gaugeSVG(d.title)}<div class="sub">&nbsp;</div>${chartSVG()}</div>`).join("");
+  for (const d of dials) {
+    const el = $("dials").querySelector(`[data-k="${d.key}"]`);
+    d.arc = el.querySelector(".val"); d.big = el.querySelector(".big");
+    d.subEl = el.querySelector(".sub"); d.chart = el.querySelector(".chart");
+  }
+
+  // CPU tiles: one column per physical core, one row per hardware thread (SMT siblings stack)
+  $("cores").innerHTML = info.cpu_groups.map((g, gi) => {
+    const rows = Math.max(...g.cores.map(c => c.cpus.length));
+    const lab = rows > 1;
+    const first = g.cores[0].label.replace("core ", ""), lastc = g.cores[g.cores.length - 1].label.replace("core ", "");
+    let h = `<div class="cg"><div class="cgh"><span>${esc(g.name)} · cores ${first}–${lastc}</span><span class="r" id="cg${gi}"></span></div>
+      <div class="tiles" style="grid-template-columns:${lab ? "20px " : ""}repeat(${g.cores.length}, minmax(0, 1fr))">`;
+    for (let r = 0; r < rows; r++) {
+      if (lab) h += `<div class="rl" title="${r ? "SMT sibling thread" : "first thread"}">T${r}</div>`;
+      for (const c of g.cores) {
+        const n = c.cpus[r];
+        h += n == null ? `<div></div>`
+          : `<div class="tile" id="cpu${n}" title="cpu ${n} · ${esc(c.label)}${lab ? ` · thread ${r} (siblings ${c.cpus.join(", ")})` : ""}"><div class="f"></div><span></span></div>`;
+      }
+    }
+    if (lab) h += `<div class="rl">GHz</div>`;
+    for (const c of g.cores) h += `<div class="ghz" id="mhz${c.cpus[0]}"></div>`;
+    return h + `</div></div>`;
+  }).join("");
+
+  hist = {};
+  for (const row of info.history || []) pushHist(row);
+}
+
+function pushHist(d) {
+  for (const k in d) {
+    (hist[k] ||= []).push(d[k]);
+    if (hist[k].length > HIST) hist[k].shift();
+  }
+}
+
+// ---------- per-sample update
+function update(s) {
+  lastMsg = Date.now();
+  setDot("live");
+  pushHist(s.d);
+  lastSample = s;
+  redraw(s);
+}
+
+// draws everything for one sample; also called on a theme change, since colours are read when drawing
+function redraw(s) {
+  $("h-up").textContent = `up ${dur(s.uptime)}`;
+  $("h-load").textContent = `load ${s.load.map(x => x.toFixed(2)).join(" ")}`;
+  $("h-cost").textContent = `sample ${s.cost_ms.toFixed(1)} ms (cpu ${s.cpu_ms.toFixed(1)} ms)`;
+
+  for (const d of dials) {
+    const v = s.d[d.key], base = css(d.color);
+    d.arc.style.stroke = level(v, base);
+    d.arc.setAttribute("stroke-dasharray", `${(ARC * Math.min(100, Math.max(0, v ?? 0)) / 100).toFixed(2)} ${CIRC}`);
+    d.big.textContent = v == null ? "n/a" : (v > 0 && v < 10 ? v.toFixed(1) : v.toFixed(0)) + "%";
+    d.subEl.textContent = d.sub(s);
+    drawChart(d.chart, [{v: hist[d.key] || [], color: base, fill: true}], 100);
+  }
+
+  updateCpu(s); updateVram(s); updateGpu(s); updateMem(s);
+  updateTemps(s); updateIO(s); updateGpuProcs(s); updateTop(s);
+}
+
+function updateCpu(s) {
+  const c = s.cpu, base = css("--c-cpu");
+  const valid = c.mhz.filter(x => x != null);
+  const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : null;
+  $("cpu-meta").textContent = `${pct(c.total, 1)} · ${avg ? Math.round(avg) + " MHz avg" : "n/a"}`;
+  info.cpu_groups.forEach((g, gi) => {
+    let sum = 0, n = 0, mhzSum = 0, mhzN = 0;
+    for (const core of g.cores) {
+      const mhz = Math.max(...core.cpus.map(i => c.mhz[i] ?? 0));
+      $("mhz" + core.cpus[0]).textContent = mhz ? (mhz / 1000).toFixed(1) : "";
+      for (const i of core.cpus) {
+        const v = c.cores[i], tile = $("cpu" + i);
+        if (v != null) { sum += v; n++; }
+        if (c.mhz[i]) { mhzSum += c.mhz[i]; mhzN++; }
+        tile.firstChild.style.height = Math.min(100, v ?? 0) + "%";
+        tile.firstChild.style.background = level(v, base);
+        tile.lastChild.textContent = v == null ? "–" : Math.round(v);
+      }
+    }
+    $("cg" + gi).textContent = `${n ? (sum / n).toFixed(0) : "–"}% · ${mhzN ? Math.round(mhzSum / mhzN) : "–"} MHz avg`;
+  });
+}
+
+function updateVram(s) {
+  const el = $("vram"), o = s.ollama, models = o.ok ? o.models : [];
+  const ollamaVram = models.reduce((a, m) => a + (m.size_vram || 0), 0);
+  if (!s.gpus.length) {
+    el.innerHTML = `<p class="na">n/a — ${esc(s.nvml_error || "no NVIDIA GPU")}</p>`;
+    $("vram-meta").textContent = "";
+  } else {
+    el.innerHTML = s.gpus.map(g => {
+      const total = g.vram_total, used = g.vram_used;
+      if (!total) return `<p class="na">GPU ${g.index}: n/a</p>`;
+      const ol = s.gpus.length === 1 ? Math.min(ollamaVram, used) : 0;
+      const other = used - ol, free = total - used, nproc = (g.procs || []).length;
+      return `${s.gpus.length > 1 ? `<div class="subhead"><span>GPU ${g.index}</span></div>` : ""}
+        <div class="stack">
+          <div style="width:${100 * ol / total}%;background:var(--c-gpu)"></div>
+          <div style="width:${100 * other / total}%;background:var(--c-vram)"></div>
+        </div>
+        <div class="legend">
+          <span><i style="background:var(--c-gpu)"></i>Ollama models ${gib(ol)}</span>
+          <span><i style="background:var(--c-vram)"></i>other processes ${gib(other)}</span>
+          <span><i style="background:var(--track)"></i>free ${gib(free)}</span>
+        </div>
+        <div class="note">${(100 * used / total).toFixed(1)}% used · ${nproc} GPU process${nproc === 1 ? "" : "es"} · separate from system RAM</div>`;
+    }).join("");
+    const g = s.gpus[0];
+    $("vram-meta").textContent = g.vram_total ? `${gib(g.vram_used)} / ${gib(g.vram_total)} used` : "";
+  }
+
+  const box = $("ollama");
+  if (!o.ok) {
+    $("ollama-h").textContent = o.ok === null ? "connecting…" : "not reachable";
+    box.innerHTML = o.ok === null ? "" : `<p class="na" style="margin:4px 0">not reachable — ${esc(o.url)} (${esc(o.error)})</p>`;
+    return;
+  }
+  const total = models.reduce((a, m) => a + (m.size || 0), 0);
+  $("ollama-h").textContent = `${models.length} loaded · ${gib(total)}`;
+  if (!models.length) { box.innerHTML = `<p class="muted" style="font-size:13px;margin:4px 0">No models loaded.</p>`; return; }
+  box.innerHTML = models.map(m => {
+    const onGpu = m.size ? 100 * m.size_vram / m.size : 0, partial = onGpu < 99.95;
+    const unload = m.expires_in == null ? "unload n/a" : m.expires_in > 365 * 86400 ? "kept loaded"
+                 : m.expires_in <= 0 ? "unloading" : `unloads in ${dur(m.expires_in)}`;
+    const where = partial ? `⚠ ${onGpu.toFixed(1)}% GPU · ${gib(m.size - m.size_vram)} on CPU (slow)` : "100% GPU";
+    return `<div class="om${partial ? " warn" : ""}"${partial ? ` title="Partly running on the CPU, which is much slower"` : ""}>
+      <div class="n">${esc(m.name)}${m.params ? ` <span class="muted">${esc(m.params)} ${esc(m.quant || "")}</span>` : ""}</div>
+      <div class="d">${gib(m.size)} · ${where} · ${ctxLabel(m.ctx)} · ${unload}</div></div>`;
+  }).join("");
+}
+
+function updateGpu(s) {
+  const el = $("gpud");
+  if (!s.gpus.length) {
+    el.innerHTML = `<p class="na">n/a — ${esc(s.nvml_error || "no NVIDIA GPU found")}</p>`;
+    $("gpu-meta").textContent = "";
+    return;
+  }
+  $("gpu-meta").textContent = s.gpus.length === 1 ? s.gpus[0].name.replace(/^NVIDIA (GeForce )?/, "") : `${s.gpus.length} GPUs`;
+  el.innerHTML = s.gpus.map(g => {
+    const thr = g.throttle == null ? "n/a"
+      : g.throttle.length ? `<span class="chips">${g.throttle.map(t =>
+          `<span class="chip ${/thermal|HW|power brake/.test(t) ? "bad" : t === "power cap" ? "warn" : ""}">${esc(t)}</span>`).join("")}</span>`
+      : `<span class="chip">none</span>`;
+    const pcie = g.pcie_gen != null ? `Gen ${g.pcie_gen} / ${g.pcie_gen_max ?? "?"} · x${g.pcie_width} / ${g.pcie_width_max ?? "?"}` : "n/a";
+    const every = g.pcie_every_s ? ` <span class="muted">(${g.pcie_every_s} s)</span>` : "";
+    return `<div class="gpu-block">
+      ${s.gpus.length > 1 ? `<div class="subhead"><span>GPU ${g.index} · ${esc(g.name)}</span></div>` : ""}
+      ${kv("Utilization", `${pct(g.util)} <span class="muted">· mem ctrl ${pct(g.mem_util)}</span>`)}
+      ${kv("Power draw", `${g.power_w != null ? g.power_w.toFixed(1) : "n/a"} W <span class="muted">of ${g.power_limit_w?.toFixed(0) ?? "?"} W</span>`)}
+      ${kv("Temperature", `${g.temp != null ? g.temp + " °C" : "n/a"} <span class="muted">· memory ${g.mem_temp != null ? g.mem_temp + " °C" : "n/a"}</span>`)}
+      ${kv("Fan", pct(g.fan))}
+      ${kv("SM clock", `${g.sm_clock ?? "n/a"} MHz <span class="muted">(max ${g.sm_max ?? "?"})</span>`)}
+      ${kv("Memory clock", `${g.mem_clock ?? "n/a"} MHz <span class="muted">(max ${g.mem_max ?? "?"})</span>`)}
+      ${kv("Performance state", g.pstate != null ? "P" + g.pstate : "n/a")}
+      ${kv("PCIe link", pcie)}
+      ${kv("PCIe throughput", `↓ ${rate(g.pcie_rx)} · ↑ ${rate(g.pcie_tx)}${every}`)}
+      ${kv("Encoder / decoder", `${pct(g.enc)} / ${pct(g.dec)}`)}
+      ${kv("Clock limits", thr)}
+      ${kv("Processes", (g.procs || []).length)}
+      ${chartSVG()}
+      <div class="legend small"><span><i style="background:var(--c-watts)"></i>power, last 2 min</span><span class="muted">0–${g.power_limit_w?.toFixed(0) ?? "?"} W</span></div>
+    </div>`;
+  }).join("");
+  s.gpus.forEach((g, n) => drawChart(el.children[n].querySelector(".chart"),
+    [{v: hist[`g${g.index}_watts`] || [], color: css("--c-watts"), fill: true}], g.power_limit_w || 600));
+}
+
+function updateMem(s) {
+  const m = s.mem, T = m.total;
+  const free = Math.max(0, T - m.used - m.cached - m.buffers);
+  const used = level(100 * m.used / T, css("--c-ram"));
+  $("mem-meta").textContent = `${gib(m.used)} / ${gib(T)} used`;
+  const swap = m.swap_total ? `swap ${gib(m.swap_used, 2)} of ${gib(m.swap_total)} (${(100 * m.swap_used / m.swap_total).toFixed(1)}%)` : "no swap";
+  $("mem").innerHTML = `
+    <div class="stack">
+      <div style="width:${100 * m.used / T}%;background:${used}"></div>
+      <div style="width:${100 * m.cached / T}%;background:color-mix(in srgb, var(--c-ram) 38%, var(--track))"></div>
+      <div style="width:${100 * m.buffers / T}%;background:color-mix(in srgb, var(--c-ram) 20%, var(--track))"></div>
+    </div>
+    <div class="legend">
+      <span><i style="background:${used}"></i>apps ${gib(m.used)}</span>
+      <span><i style="background:color-mix(in srgb, var(--c-ram) 38%, var(--track))"></i>page cache ${gib(m.cached)}</span>
+      <span><i style="background:color-mix(in srgb, var(--c-ram) 20%, var(--track))"></i>buffers ${bytes(m.buffers)}</span>
+      <span><i style="background:var(--track)"></i>free ${gib(free)}</span>
+    </div>
+    <div class="note">available ${gib(m.available)} · shared ${gib(m.shmem, 2)} · ${swap}</div>`;
+}
+
+function updateTemps(s) {
+  const rows = [];
+  for (const g of s.gpus) {
+    const pre = s.gpus.length > 1 ? `GPU ${g.index}` : "GPU";
+    if (g.temp != null) rows.push({label: `${pre} core`, c: g.temp, crit: g.temp_slowdown || 90});
+    if (g.mem_temp != null) rows.push({label: `${pre} memory`, c: g.mem_temp, crit: 105});
+  }
+  if (!s.gpus.length) rows.push({label: "GPU", c: null, crit: 90});
+  const order = {cpu: 0, nvme: 1, dimm: 2, igpu: 3, nic: 4, other: 5};
+  rows.push(...[...s.temps].sort((a, b) => (order[a.group] ?? 9) - (order[b.group] ?? 9)));
+  const el = $("temps");
+  if (el.childElementCount !== rows.length) {
+    el.innerHTML = rows.map(() => `<div class="trow"><div class="top"><span class="k"></span><span class="v"></span></div><div class="tbar"><div></div></div></div>`).join("");
+  }
+  rows.forEach((r, i) => {
+    const row = el.children[i], max = r.crit || 100;
+    const [k, v] = row.firstChild.children, fill = row.lastChild.firstChild;
+    k.textContent = r.label;
+    k.title = r.label + (r.crit ? ` (limit ${r.crit} °C)` : "");
+    v.textContent = r.c == null ? "n/a" : `${r.c.toFixed(1)} °C`;
+    const p = r.c == null ? 0 : Math.min(100, 100 * r.c / max);
+    fill.style.width = p + "%";
+    fill.style.background = p >= 90 ? css("--red") : p >= 75 ? css("--amber") : css("--c-temp");
+  });
+}
+
+function updateIO(s) {
+  let h = "";
+  for (const d of s.disks) {
+    const t = `${d.name} ${d.model}`;
+    h += kv(`${esc(d.name)} read`, rate(d.read), t) + kv(`${esc(d.name)} write`, rate(d.write), t)
+       + kv(`${esc(d.name)} busy`, pct(d.busy, 1), t);
+  }
+  if (!s.disks.length) h += kv("Disks", "collecting…");
+  for (const f of s.fs) {
+    h += kv(`${esc(f.mount)} <span class="muted">${esc(f.fstype)}</span>`, `${bytes(f.used)} of ${bytes(f.total)} <span class="muted">· ${pct(f.pct, 1)}</span>`, f.dev);
+  }
+  for (const n of s.net) {
+    const sp = n.speed ? (n.speed >= 1000 ? n.speed / 1000 + " Gb/s" : n.speed + " Mb/s") : n.wireless ? "Wi-Fi" : "";
+    h += kv(`${esc(n.name)} <span class="muted hide-sm">${esc(n.ip || "")}${sp ? " · " + sp : ""}</span>`, `↓ ${rate(n.rx)} · ↑ ${rate(n.tx)}`, n.ip || "");
+  }
+  if (!s.net.length) h += kv("Network", "no physical interface up");
+  $("io").innerHTML = h;
+  const rx = hist.net_rx || [], tx = hist.net_tx || [];
+  const max = Math.max(1024, ...rx.filter(x => x != null), ...tx.filter(x => x != null));
+  $("net-max").textContent = `peak ${rate(max)}`;
+  drawChart($("net-chart"), [{v: rx, color: css("--c-rx"), fill: true}, {v: tx, color: css("--c-tx"), fill: false}], max * 1.05);
+}
+
+function procTable(cols, rows) {
+  const narrow = matchMedia("(max-width: 520px)").matches;
+  // on phones Command is hidden, so Name takes the width it leaves
+  cols = cols.filter(c => !(narrow && c.cls === "hide-sm")).map(c => !narrow ? c
+    : c.h === "Name" ? {...c, w: ""} : c.h === "PID" ? {...c, w: "70px"} : c.r ? {...c, w: "72px"} : c);
+  return `<table><colgroup>${cols.map(c => `<col${c.w ? ` style="width:${c.w}"` : ""}>`).join("")}</colgroup>
+    <thead><tr>${cols.map(c => `<th class="${c.r ? "r " : ""}${c.cls || ""}">${c.h}</th>`).join("")}</tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
+function updateGpuProcs(s) {
+  const el = $("gproc");
+  if (!s.gpus.length) { el.innerHTML = `<p class="na">n/a</p>`; $("gproc-meta").textContent = ""; return; }
+  const all = [];
+  for (const g of s.gpus) for (const p of g.procs || []) all.push({...p, gpu: g.index});
+  all.sort((a, b) => (b.vram ?? -1) - (a.vram ?? -1));
+  $("gproc-meta").textContent = `${all.length} process${all.length === 1 ? "" : "es"} · ${bytes(all.reduce((a, p) => a + (p.vram || 0), 0))} VRAM`;
+  if (!all.length) { el.innerHTML = `<p class="muted" style="font-size:13px">No processes on the GPU.</p>`; return; }
+  const multi = s.gpus.length > 1;
+  // same column widths as the CPU table below, so the two line up
+  const cols = [{h: "PID", w: "80px"}, ...(multi ? [{h: "GPU", w: "40px"}] : []),
+                {h: "Name", w: "18%"}, {h: "GPU mem", w: "90px", r: 1}, {h: "RSS", w: "90px", r: 1}, {h: "Command", cls: "hide-sm"}];
+  el.innerHTML = procTable(cols, all.map(p => `<tr>
+    <td>${p.pid}</td>${multi ? `<td>${p.gpu}</td>` : ""}
+    <td title="${esc(p.name)} (${p.type === "G" ? "graphics" : p.type === "C" ? "compute" : "compute + graphics"})">${esc(p.name)} <span class="muted">${esc(p.type)}</span></td>
+    <td class="r">${p.vram == null ? "n/a" : bytes(p.vram)}</td><td class="r">${bytes(p.rss)}</td>
+    <td class="cmd hide-sm" title="${esc(p.cmd)}">${esc(p.cmd)}</td></tr>`).join(""));
+}
+
+function updateTop(s) {
+  const el = $("top");
+  if (!s.top.length) { el.innerHTML = `<p class="muted" style="font-size:13px">collecting…</p>`; return; }
+  const multi = s.gpus.length > 1;
+  const cols = [{h: "PID", w: "80px"}, ...(multi ? [{h: "", w: "40px"}] : []),
+                {h: "Name", w: "18%"}, {h: "CPU", w: "90px", r: 1}, {h: "RSS", w: "90px", r: 1}, {h: "Command", cls: "hide-sm"}];
+  el.innerHTML = procTable(cols, s.top.map(p => `<tr>
+    <td>${p.pid}</td>${multi ? "<td></td>" : ""}<td title="${esc(p.name)}">${esc(p.name)}</td>
+    <td class="r">${p.cpu.toFixed(1)}%</td><td class="r">${bytes(p.rss)}</td>
+    <td class="cmd hide-sm" title="${esc(p.cmd)}">${esc(p.cmd)}</td></tr>`).join(""));
+}
+
+// ---------- connection: open only while the tab is visible
+function setDot(state) {
+  const d = $("dot");
+  d.className = "dot " + state;
+  d.title = {live: "live", stale: "no data for a few seconds", down: "disconnected", paused: "paused (tab hidden)"}[state] || state;
+}
+function connect() {
+  if (es) return;
+  es = new EventSource("stream");
+  es.addEventListener("info", e => { info = JSON.parse(e.data); build(); });
+  es.onmessage = e => { if (info) update(JSON.parse(e.data)); };
+  es.onerror = () => setDot("down");
+}
+function disconnect() { if (es) { es.close(); es = null; } setDot("paused"); }
+document.addEventListener("visibilitychange", () => document.hidden ? disconnect() : connect());
+setInterval(() => { if (es && lastMsg && Date.now() - lastMsg > 3500) setDot("stale"); }, 1000);
+
+// test hook: render a captured sample without a server (used for screenshots)
+window.__render = (i, s) => { info = i; build(); update(s); };
+if (!document.hidden) connect();
+</script>
+</body>
+</html>

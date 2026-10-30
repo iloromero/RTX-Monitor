@@ -1,0 +1,15 @@
+[Unit]
+Description=rtx-monitor — real-time GPU/CPU/memory/disk dashboard on :8888
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/rtx-monitor
+ExecStart=/usr/bin/python3 %h/projects/rtx-monitor/server.py --host 0.0.0.0 --port 8888
+Restart=on-failure
+RestartSec=3
+Nice=10
+# stdout (start-up NVML timing report) goes to journald:
+#   journalctl --user -u rtx-monitor -f
+
+[Install]
+WantedBy=default.target
