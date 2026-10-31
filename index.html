@@ -88,7 +88,10 @@ header h1 { font-size: 19px; font-weight: 700; margin: 0; display: flex; align-i
   .dial .title .short { display: inline; }
 }
 .chart { display: block; width: 100%; height: 30px; margin-top: 10px; }
-.dial .chart { margin-top: auto; padding-top: 8px; height: 38px; }
+/* Match spark-monitor's dial history geometry and styling. */
+.dial .chart { height: 34px; margin-top: 6px; flex-shrink: 0; }
+.dial .chart polyline { fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.dial .chart polygon { opacity: .12; }
 
 /* panels */
 .panels { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
@@ -315,8 +318,19 @@ function drawChart(svg, series, max) {
   }
   svg.innerHTML = out;
 }
-const chartSVG = () => `<svg class="chart" viewBox="0 0 ${HIST - 1} 30" preserveAspectRatio="none"></svg>`;
+const chartSVG = (width = HIST - 1, height = 30) => `<svg class="chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none"></svg>`;
 const kv = (k, v, title = "") => `<div class="kvr"><span class="k"${title ? ` title="${esc(title)}"` : ""}>${k}</span><span class="v">${v}</span></div>`;
+
+// Dial history renderer from iloromero/spark-monitor (SVG element adapter).
+function drawDialHistory(svg, series, max) {
+  const m = max ?? Math.max(1, ...series.flatMap(s => s[0]));
+  svg.innerHTML = series.map(([data, color]) => {
+    const off = HIST - data.length;
+    const pts = data.map((v, i) => `${off + i},${(34 - 32 * v / m).toFixed(1)}`).join(" ");
+    return data.length < 2 ? "" :
+      `<polygon fill="${color}" points="${off},34 ${pts} ${HIST - 1},34"/><polyline stroke="${color}" points="${pts}"/>`;
+  }).join("");
+}
 
 // ---------- state
 let info = null, hist = {}, dials = [], es = null, lastMsg = 0, lastSample = null;
@@ -388,7 +402,7 @@ function build() {
   dials = dialDefs();
   $("dials").style.setProperty("--n", dials.length);
   $("dials").innerHTML = dials.map(d =>
-    `<div class="card dial" data-k="${d.key}"><div class="title"><span class="long">${esc(d.title)}</span><span class="short">${esc(d.short || d.title)}</span></div>${gaugeSVG(d.title)}<div class="sub">&nbsp;</div>${chartSVG()}</div>`).join("");
+    `<div class="card dial" data-k="${d.key}"><div class="title"><span class="long">${esc(d.title)}</span><span class="short">${esc(d.short || d.title)}</span></div>${gaugeSVG(d.title)}<div class="sub">&nbsp;</div>${chartSVG(120, 34)}</div>`).join("");
   for (const d of dials) {
     const el = $("dials").querySelector(`[data-k="${d.key}"]`);
     d.arc = el.querySelector(".val"); d.big = el.querySelector(".big");
@@ -415,13 +429,16 @@ function build() {
     return h + `</div></div>`;
   }).join("");
 
-  hist = {};
-  for (const row of info.history || []) pushHist(row);
+  // Like Spark, keep browser history when the stream reconnects.
+  // Samples received by this page are the only readings added to the graphs.
 }
 
 function pushHist(d) {
-  for (const k in d) {
-    (hist[k] ||= []).push(d[k]);
+  const dialKeys = new Set(dials.map(x => x.key));
+  for (const k of new Set([...Object.keys(d), ...dialKeys])) {
+    const dial = dialKeys.has(k);
+    const v = d[k];
+    (hist[k] ||= []).push(dial ? (v == null ? 0 : Math.max(0, Math.min(100, v))) : v);
     if (hist[k].length > HIST) hist[k].shift();
   }
 }
@@ -447,7 +464,7 @@ function redraw(s) {
     d.arc.setAttribute("stroke-dasharray", `${(ARC * Math.min(100, Math.max(0, v ?? 0)) / 100).toFixed(2)} ${CIRC}`);
     d.big.textContent = v == null ? "n/a" : (v > 0 && v < 10 ? v.toFixed(1) : v.toFixed(0)) + "%";
     d.subEl.textContent = d.sub(s);
-    drawChart(d.chart, [{v: hist[d.key] || [], color: base, fill: true}], 100);
+    drawDialHistory(d.chart, [[hist[d.key] || [], `var(${d.color})`]], 100);
   }
 
   updateCpu(s); updateVram(s); updateGpu(s); updateMem(s);
